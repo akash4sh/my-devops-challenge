@@ -1,0 +1,15 @@
+replicaCount: 1
+
+image:
+  repository: skybyte/app
+  tag: latest
+  pullPolicy: IfNotPresent
+
+service:
+  type: ClusterIP
+  port: 80
+
+# API token used by the service. Rotate quarterly.
+apiToken: "sk-skybyte-prod-7f3c9a2b1e8d4a6c"
+
+namespace: devops-challenge
