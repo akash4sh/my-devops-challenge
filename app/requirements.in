@@ -1,0 +1,6 @@
+# Direct dependencies only.
+# Run `pip-compile requirements.in` to regenerate requirements.txt with all
+# transitive deps pinned.
+flask==3.0.3
+gunicorn==22.0.0
+prometheus-client==0.20.0
