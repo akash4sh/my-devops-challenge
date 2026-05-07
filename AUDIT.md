@@ -178,17 +178,23 @@ Both commands suppress non-zero exit codes. A broken Helm chart or invalid Terra
 
 ### D1 — README architecture diagram contradicts actual code
 **File:** `README.md (Architecture section)`
+
 **What's wrong:** The diagram shows [Pod:appuser:80] implying the pod runs as a non-root user called appuser. The actual Dockerfile has no USER directive — the process runs as root (UID 0). There is no appuser anywhere in the codebase.
+
 **Why it matters:** The README is usually the first thing an on-call engineer checks during an incident. If the information is incorrect, it can lead to confusion, wrong troubleshooting steps, and loss of trust in the documentation..
+
 **Fix:** After hardening (adding non-root user in Dockerfile), update the diagram to accurately reflect the fixed state.
 
 ---
 
 ### D2 — README claims CI runs lint — it does not
 **File:** README.md (CI section) vs .github/workflows/ci.yml
+
 **What's wrong:** README states "GitHub Actions runs lint, helm lint, terraform validate...". The actual CI lint step is: `flake8 app/ --exclude=app/* --exit-zero`
 `--exclude=app/*` excludes the entire target directory. `--exit-zero` suppresses all errors. Nothing is actually linted. Similarly, helm lint and terraform validate both use || true. CI always reports green regardless of code state.
+
 **Why it matters:** Engineers merge code trusting the CI description. It can create confusion and give false confidence that everything is working correctly..
+
 **Fix:** Fix the CI (remove --exclude, --exit-zero, || true) so that the README description becomes accurate.
 
 ---
