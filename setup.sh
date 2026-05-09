@@ -9,22 +9,14 @@
 #   ./setup.sh
 #
 # Requirements:
-#   docker, terraform >= 1.5, helm >= 3.12, kubectl
+#   docker, terraform >= 1.5, helm >= 3.12, kubectl (pointing at target cluster)
 
-# ---------------------------------------------------------------------------
-# Strict mode:
-#   -e  exit immediately on any command failure
-#   -u  treat unset variables as errors
-#   -o pipefail  pipeline fails if any command in it fails (not just the last)
-# ---------------------------------------------------------------------------
 set -euo pipefail
 
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
 IMAGE_REPO="skybyte/app"
-# Use the short git SHA as the image tag for deterministic, traceable builds.
-# "latest" is not a version — it provides no rollback capability.
 IMAGE_TAG="$(git rev-parse --short HEAD)"
 IMAGE="${IMAGE_REPO}:${IMAGE_TAG}"
 NAMESPACE="devops-challenge"
@@ -34,20 +26,47 @@ HELM_CHART="helm/skybyte-app"
 echo "==> Image tag: ${IMAGE_TAG}"
 
 # ---------------------------------------------------------------------------
+# Detect kind cluster
+# ---------------------------------------------------------------------------
+KUBE_CONTEXT=$(kubectl config current-context 2>/dev/null || echo "")
+if echo "${KUBE_CONTEXT}" | grep -q "kind"; then
+  IS_KIND=true
+  PULL_POLICY="Never"
+  echo "==> Detected kind cluster (context: ${KUBE_CONTEXT})"
+  echo "    Image will be loaded directly into kind — no registry push needed."
+else
+  IS_KIND=false
+  PULL_POLICY="IfNotPresent"
+  echo "==> Non-kind cluster detected (context: ${KUBE_CONTEXT})"
+fi
+
+# ---------------------------------------------------------------------------
 # Step 1 — Build Docker image
 # ---------------------------------------------------------------------------
 echo ""
-echo "==> [1/3] Building Docker image: ${IMAGE}"
+echo "==> [1/4] Building Docker image: ${IMAGE}"
 docker build --tag "${IMAGE}" .
 
 # ---------------------------------------------------------------------------
-# Step 2 — Terraform (namespace, ResourceQuota, Secret)
+# Step 2 — Load image into kind (kind clusters only)
+# ---------------------------------------------------------------------------
+if [[ "${IS_KIND}" == "true" ]]; then
+  echo ""
+  echo "==> [2/4] Loading image into kind cluster"
+  kind load docker-image "${IMAGE}"
+  echo "    Image loaded successfully."
+else
+  echo ""
+  echo "==> [2/4] Skipping kind load (not a kind cluster)"
+  echo "    Push the image to your registry before proceeding."
+fi
+
+# ---------------------------------------------------------------------------
+# Step 3 — Terraform (namespace, ResourceQuota, Secret)
 # ---------------------------------------------------------------------------
 echo ""
-echo "==> [2/3] Applying Terraform"
+echo "==> [3/4] Applying Terraform"
 
-# Check the token is set before entering the terraform directory.
-# Failing here with a clear message is better than a cryptic Terraform error.
 if [[ -z "${TF_VAR_api_token:-}" ]]; then
   echo ""
   echo "ERROR: TF_VAR_api_token is not set."
@@ -59,29 +78,25 @@ fi
 (
   cd terraform
   terraform init -input=false
-  # -auto-approve: non-interactive for script use.
-  # Running twice is safe — Terraform is declarative and idempotent.
   terraform apply -auto-approve -input=false
 )
 
 # ---------------------------------------------------------------------------
-# Step 3 — Helm install/upgrade
+# Step 4 — Helm install/upgrade
 # ---------------------------------------------------------------------------
 echo ""
-echo "==> [3/3] Installing/upgrading Helm release: ${RELEASE_NAME}"
+echo "==> [4/4] Installing/upgrading Helm release: ${RELEASE_NAME}"
 
-# --install      : creates the release if it doesn't exist (idempotent)
-# --wait         : block until all pods are ready, so failures surface here
-# --timeout 120s : give pods 2 minutes to become healthy
-# --set image.tag: pass the git SHA so the running version is always traceable
 helm upgrade "${RELEASE_NAME}" "${HELM_CHART}" \
   --install \
   --namespace "${NAMESPACE}" \
   --create-namespace \
   --set image.tag="${IMAGE_TAG}" \
+  --set image.pullPolicy="${PULL_POLICY}" \
   --wait \
   --timeout 120s
 
 echo ""
 echo "==> Done. Release '${RELEASE_NAME}' is running in namespace '${NAMESPACE}'."
 echo "    Image: ${IMAGE}"
+echo "    Run ./system-checks.sh to verify the deployment."
