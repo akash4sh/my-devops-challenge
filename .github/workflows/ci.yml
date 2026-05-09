@@ -127,7 +127,7 @@ jobs:
           # local Docker daemon directly — they must be pushed to a registry.
           # For the scan step below, we build amd64-only into the local daemon.
           push: false
-          tags: skybyte/app:ci 
+          tags: skybyte/app:ci
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
@@ -163,6 +163,7 @@ jobs:
   kyverno-policy-check:
     name: Kyverno Policy Check
     runs-on: ubuntu-latest
+    # Depends on helm-validate so we know the chart renders cleanly first
     needs: helm-validate
     steps:
       - uses: actions/checkout@v4
@@ -173,10 +174,11 @@ jobs:
 
       - name: Install Kyverno CLI
         run: |
-          curl -LO https://github.com/kyverno/kyverno/releases/download/v1.12.0/kyverno_cli_linux_amd64.tar.gz
-          tar -xzf kyverno_cli_linux_amd64.tar.gz
+          curl -LO https://github.com/kyverno/kyverno/releases/download/v1.12.0/kyverno-cli_v1.12.0_linux_x86_64.tar.gz
+          tar -xzf kyverno-cli_v1.12.0_linux_x86_64.tar.gz
           mv kyverno /usr/local/bin/kyverno
           chmod +x /usr/local/bin/kyverno
+          kyverno version
 
       - name: Render Helm manifests
         run: |
