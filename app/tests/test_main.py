@@ -11,7 +11,7 @@ Run with:
 """
 
 import pytest
-from main import app, REQUEST_COUNT
+from main import app
 
 
 @pytest.fixture
