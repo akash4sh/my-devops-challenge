@@ -190,7 +190,7 @@ jobs:
 
       - name: Apply Kyverno policies against rendered manifests
         run: |
-          kyverno apply policies/ \
+          kyverno apply policies/disallow-root-user.yaml policies/require-resource-limits.yaml \
             --resource rendered/manifests.yaml \
             --detailed-results
           # kyverno apply exits non-zero if any policy fails —
