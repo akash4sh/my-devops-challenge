@@ -1,0 +1,9 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: bad-pod
+  namespace: devops-challenge
+spec:
+  containers:
+    - name: app
+      image: python:3.12-slim-bookworm

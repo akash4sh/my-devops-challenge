@@ -1,0 +1,40 @@
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: require-resource-limits
+  annotations:
+    policies.kyverno.io/title: Require Resource Limits
+    policies.kyverno.io/category: Reliability Baseline
+    policies.kyverno.io/severity: medium
+    policies.kyverno.io/description: >-
+      All containers must declare CPU and memory requests and limits.
+      Without requests the scheduler cannot place pods correctly.
+      Without limits a single container can starve all other workloads
+      on the node. The namespace ResourceQuota also requires requests
+      to be set for quota accounting to work.
+spec:
+  validationFailureAction: Enforce
+  background: true
+  rules:
+    - name: check-resource-requests-limits
+      match:
+        any:
+          - resources:
+              kinds:
+                - Pod
+              namespaces:
+                - devops-challenge
+      validate:
+        message: >-
+          All containers must declare resources.requests and resources.limits
+          for both cpu and memory.
+        pattern:
+          spec:
+            containers:
+              - resources:
+                  requests:
+                    memory: "?*"
+                    cpu: "?*"
+                  limits:
+                    memory: "?*"
+                    cpu: "?*"
