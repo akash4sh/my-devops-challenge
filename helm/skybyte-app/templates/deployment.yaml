@@ -16,23 +16,64 @@ spec:
       labels:
         app.kubernetes.io/name: {{ include "skybyte-app.name" . }}
         app.kubernetes.io/instance: {{ .Release.Name }}
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8080"
+        prometheus.io/path: "/metrics"
     spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      terminationGracePeriodSeconds: 30
       containers:
         - name: app
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           ports:
             - name: http
-              containerPort: 80
+              containerPort: 8080
               protocol: TCP
           env:
             - name: API_TOKEN
-              value: {{ .Values.apiToken | quote }}
+              valueFrom:
+                secretKeyRef:
+                  name: api-token
+                  key: token
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          resources:
+            requests:
+              cpu: "50m"
+              memory: "64Mi"
+            limits:
+              cpu: "200m"
+              memory: "128Mi"
           livenessProbe:
             httpGet:
-              path: /
+              path: /healthz
               port: http
+            initialDelaySeconds: 10
+            periodSeconds: 15
+            failureThreshold: 3
+            timeoutSeconds: 2
           readinessProbe:
             httpGet:
-              path: /
+              path: /readyz
               port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            failureThreshold: 2
+            timeoutSeconds: 2
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
