@@ -2,40 +2,194 @@ name: CI
 
 on:
   push:
+    branches: ["**"]
   pull_request:
+    branches: ["main"]
 
 jobs:
-  lint-and-build:
+  # -------------------------------------------------------------------------
+  # Job 1 — Python lint
+  # -------------------------------------------------------------------------
+  lint-python:
+    name: Lint Python (ruff)
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - uses: actions/setup-python@v5
         with:
-          python-version: '3.9'
+          python-version: "3.12"
 
-      - name: Install flake8
-        run: pip install flake8
+      - name: Install ruff
+        run: pip install ruff==0.4.4
 
-      - name: Lint Python
-        run: flake8 app/ --exclude=app/* --exit-zero
+      - name: Lint
+        # No --exit-zero. No exclusions. Failures block the build.
+        run: ruff check app/
 
-      - name: Set up Helm
-        uses: azure/setup-helm@v4
+  # -------------------------------------------------------------------------
+  # Job 2 — Python unit tests
+  # -------------------------------------------------------------------------
+  test-python:
+    name: Unit Tests (pytest)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r app/requirements.txt pytest pytest-cov
+
+      - name: Run tests
+        run: pytest app/tests/ -v --cov=app --cov-report=term-missing
+
+  # -------------------------------------------------------------------------
+  # Job 3 — Helm lint + kubeconform
+  # -------------------------------------------------------------------------
+  helm-validate:
+    name: Helm Lint + kubeconform
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: azure/setup-helm@v4
+        with:
+          version: "3.15.0"
 
       - name: Helm lint
-        run: helm lint helm/skybyte-app || true
+        # No || true. A broken chart must fail CI.
+        run: helm lint helm/skybyte-app
 
-      - name: Set up Terraform
-        uses: hashicorp/setup-terraform@v3
+      - name: Install kubeconform
+        run: |
+          curl -sSL https://github.com/yannh/kubeconform/releases/latest/download/kubeconform-linux-amd64.tar.gz \
+            | tar xz -C /usr/local/bin
+
+      - name: Render and validate manifests
+        run: |
+          helm template skybyte-app helm/skybyte-app \
+            --namespace devops-challenge \
+            --set image.tag=ci \
+          | kubeconform \
+              --strict \
+              --kubernetes-version 1.29.0 \
+              --summary
+
+  # -------------------------------------------------------------------------
+  # Job 4 — Terraform fmt + validate
+  # -------------------------------------------------------------------------
+  terraform-validate:
+    name: Terraform fmt + validate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.8.0"
+
+      - name: Terraform fmt check
+        run: |
+          cd terraform
+          terraform fmt -check -recursive
 
       - name: Terraform validate
         run: |
           cd terraform
-          terraform init -backend=false
-          terraform validate || true
+          # -backend=false skips real backend init; sufficient for structural validation
+          terraform init -backend=false -input=false
+          terraform validate
 
-      - name: Build Docker image
-        run: docker build -t skybyte/app:ci .
+  # -------------------------------------------------------------------------
+  # Job 5 — Docker build (multi-arch) + Trivy scan
+  # -------------------------------------------------------------------------
+  docker-build-scan:
+    name: Docker Build + Trivy Scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up QEMU (for arm64 emulation)
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build multi-arch image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          # load: false because multi-arch images cannot be loaded into the
+          # local Docker daemon directly — they must be pushed to a registry.
+          # For the scan step below, we build amd64-only into the local daemon.
+          push: false
+          tags: skybyte/app:ci 
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Build amd64 image locally for scanning
+        run: |
+          docker build \
+            --platform linux/amd64 \
+            --tag skybyte/app:ci-scan \
+            .
+
+      - name: Run Trivy filesystem scan (source + deps)
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: fs
+          scan-ref: .
+          severity: HIGH,CRITICAL
+          # exit-code 1 fails the build on HIGH/CRITICAL findings
+          exit-code: "1"
+          ignore-unfixed: true
+
+      - name: Run Trivy image scan (built image)
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: image
+          image-ref: skybyte/app:ci-scan
+          severity: HIGH,CRITICAL
+          exit-code: "1"
+          ignore-unfixed: true
+
+  # -------------------------------------------------------------------------
+  # Job 6 — Kyverno policy check in CI
+  # -------------------------------------------------------------------------
+  kyverno-policy-check:
+    name: Kyverno Policy Check
+    runs-on: ubuntu-latest
+    needs: helm-validate
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: azure/setup-helm@v4
+        with:
+          version: "3.15.0"
+
+      - name: Install Kyverno CLI
+        run: |
+          curl -LO https://github.com/kyverno/kyverno/releases/download/v1.12.0/kyverno_cli_linux_amd64.tar.gz
+          tar -xzf kyverno_cli_linux_amd64.tar.gz
+          mv kyverno /usr/local/bin/kyverno
+          chmod +x /usr/local/bin/kyverno
+
+      - name: Render Helm manifests
+        run: |
+          mkdir -p rendered
+          helm template skybyte-app helm/skybyte-app \
+            --namespace devops-challenge \
+            --set image.tag=ci \
+            > rendered/manifests.yaml
+
+      - name: Apply Kyverno policies against rendered manifests
+        run: |
+          kyverno apply policies/ \
+            --resource rendered/manifests.yaml \
+            --detailed-results
+          # kyverno apply exits non-zero if any policy fails —
+          # this will block the build on a policy violation.
